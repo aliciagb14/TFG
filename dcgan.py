@@ -1,70 +1,48 @@
-# Arquitectura de la CNN, donde el parámetro `units` de la ultima capa Densa representa el numero de neuronas de la capa de salida, 
-# y será igual a la cantidad distinta de keywords que estemos tratando.
-# **NOTA:** Siendo un problema de clasificación de N, donde nos interesa obtener un valor por cada clase, la función de activación de la última capa tiene que ser `sigmoid`.
-# - Usaremos como métrica el **RMSE** (Root Mean Squared Error), para medir la distancia entre los valores predichos y los reales. Un valor de cero indicaría un ajuste perfecto a los datos.
-
-
 import tensorflow as tf
 from tensorflow.keras.losses import BinaryCrossentropy
 tf.__version__
-import glob
-import imageio
 import matplotlib.pyplot as plt
 import numpy as np
-import os
-import PIL
+import cv2
+import os 
+from PIL import Image
 from tensorflow.keras import layers
 import time
 
+
 from IPython import display
 
-# Este modelo empieza con una capa densa que recoge el vector de ruido de entrada y lo transforma en un tensor tridimensional, que en las sucesivas capas lo va transformando hasta llegar a una salida de 28 × 28 × 1. Sin entrar en detalle, comentaremos los 3 tipos de capas que usa este modelo que no hemos definido anteriormente en este libro:
-
-# Conv2DTranspose[13]: es una capa que realiza una transformación en dirección opuesta a una convolución normal.
-# BatchNormalization[14]: sirve para acelerar la etapa de entrenamiento de una capa con normalización de los pesos en esta.
-# LeakyReLU[15]: una versión modificada de la ReLu que se utiliza en cada capa excepto en la última capa[16].
-# En la última capa se ha usado una función de activación tanh. La razón para usar tanh(en lugar de por ejemplo una sigmoide, que generaría valores en el rango más típico de 0 a 1) es que tanhtiende a producir imágenes más nítidas[17].
-
-(train_images, train_labels), (_, _) = tf.keras.datasets.mnist.load_data()
-     
-train_images = train_images.reshape(train_images.shape[0], 28, 28, 1).astype('float32')
-train_images = (train_images - 127.5) / 127.5  # Normalize the images to [-1, 1]
 BUFFER_SIZE = 60000
 BATCH_SIZE = 256
-# Batch and shuffle the data
-train_dataset = tf.data.Dataset.from_tensor_slices(train_images).shuffle(BUFFER_SIZE).batch(BATCH_SIZE)
 
 def make_generator():
     model = tf.keras.Sequential()
-    model.add(layers.Dense(7*7*256, use_bias=False, input_shape=(100,)))
+    model.add(layers.Dense(7*7*512, use_bias=False, input_shape=(100,)))
     model.add(layers.BatchNormalization())
     model.add(layers.LeakyReLU())
 
-    model.add(layers.Reshape((7, 7, 256)))
-    assert model.output_shape == (None, 7, 7, 256)  # Note: None is the batch size
+    model.add(layers.Reshape((7, 7, 512)))
+    assert model.output_shape == (None, 7, 7, 512)
 
-    model.add(layers.Conv2DTranspose(128, (5, 5), strides=(1, 1), padding='same', use_bias=False))
-    assert model.output_shape == (None, 7, 7, 128)
+    model.add(layers.Conv2DTranspose(256, (5, 5), strides=(1, 1), padding='same', use_bias=False))
+    assert model.output_shape == (None, 7, 7, 256)
+    model.add(layers.BatchNormalization())
+    model.add(layers.LeakyReLU())
+
+    model.add(layers.Conv2DTranspose(128, (5, 5), strides=(2, 2), padding='same', use_bias=False))
+    assert model.output_shape == (None, 14, 14, 128)
     model.add(layers.BatchNormalization())
     model.add(layers.LeakyReLU())
 
     model.add(layers.Conv2DTranspose(64, (5, 5), strides=(2, 2), padding='same', use_bias=False))
-    assert model.output_shape == (None, 14, 14, 64)
+    assert model.output_shape == (None, 28, 28, 64)
     model.add(layers.BatchNormalization())
     model.add(layers.LeakyReLU())
 
-    model.add(layers.Conv2DTranspose(1, (5, 5), strides=(2, 2), padding='same', use_bias=False, activation='tanh'))
+    model.add(layers.Conv2DTranspose(1, (5, 5), strides=(1, 1), padding='same', use_bias=False, activation='tanh'))
     assert model.output_shape == (None, 28, 28, 1)
 
     return model
-
-generator = make_generator()
-
-noise = tf.random.normal([1, 100])
-generated_image = generator(noise, training=False)
-
-plt.imshow(generated_image[0, :, :, 0], cmap='gray')
-cross_entropy = BinaryCrossentropy(from_logits=True)
 
 def make_discriminator():
     model = tf.keras.Sequential()
@@ -82,7 +60,15 @@ def make_discriminator():
 
     return model
 
+def success_rate(r, FAR, FIPS, t):
+    return 1 - (1 - r * FAR) ** (FIPS * t)
 
+generator = make_generator()
+noise = tf.random.normal([1, 100])
+generated_image = generator(noise, training=False)
+
+plt.imshow(generated_image[0, :, :, 0], cmap='gray')
+cross_entropy = BinaryCrossentropy(from_logits=True)
 discriminator = make_discriminator()
 decision = discriminator(generated_image)
 print (decision)
@@ -106,18 +92,12 @@ checkpoint = tf.train.Checkpoint(generator_optimizer=generator_optimizer,
                                  discriminator_optimizer=discriminator_optimizer,
                                  generator=generator,
                                  discriminator=discriminator)
-     
-#Define the training loop
-EPOCHS = 50
+
+EPOCHS = 400
 noise_dim = 100
 num_examples_to_generate = 16
-
-# You will reuse this seed overtime (so it's easier)
-# to visualize progress in the animated GIF)
 seed = tf.random.normal([num_examples_to_generate, noise_dim])
 
-# Notice the use of `tf.function`
-# This annotation causes the function to be "compiled".
 @tf.function
 def train_step(images):
     noise = tf.random.normal([BATCH_SIZE, noise_dim])
@@ -137,65 +117,82 @@ def train_step(images):
     generator_optimizer.apply_gradients(zip(gradients_of_generator, generator.trainable_variables))
     discriminator_optimizer.apply_gradients(zip(gradients_of_discriminator, discriminator.trainable_variables))
 
-def train(dataset, epochs):
-  for epoch in range(epochs):
-    start = time.time()
+def train(images, epochs):
+    for epoch in range(epochs):
+        start = time.time()
 
-    for image_batch in dataset:
-      train_step(image_batch)
+        for image_batch in images:
+            train_step(image_batch)
 
-    # Produce images for the GIF as you go
+        display.clear_output(wait=True)
+        generate_and_save_images(generator, epoch + 1, seed, saveLast=True)
+
+        # Guardar el modelo cada 15 epochs
+        if (epoch + 1) % 15 == 0:
+            checkpoint.save(file_prefix=checkpoint_prefix)
+
+        print('\nTime for epoch {} is {} sec'.format(epoch + 1, time.time()-start))
+
     display.clear_output(wait=True)
-    generate_and_save_images(generator,
-                             epoch + 1,
-                             seed)
+    generate_and_save_images(generator, epochs, seed, saveLast=True)
 
-    # Save the model every 15 epochs
-    if (epoch + 1) % 15 == 0:
-      checkpoint.save(file_prefix = checkpoint_prefix)
+def generate_and_save_images(model, epoch, test_input, saveLast=False):
+    predictions = model(test_input, training=False)
 
-    print ('Time for epoch {} is {} sec'.format(epoch + 1, time.time()-start))
+    if saveLast and epoch < EPOCHS:
+        return
 
-  # Generate after the final epoch
-  display.clear_output(wait=True)
-  generate_and_save_images(generator,
-                           epochs,
-                           seed)
+    fig = plt.figure(figsize=(10, 10))
 
-#Generate and save images
-def generate_and_save_images(model, epoch, test_input):
-  # Notice `training` is set to False.
-  # This is so all layers run in inference mode (batchnorm).
-  predictions = model(test_input, training=False)
+    for i in range(predictions.shape[0]):
+        plt.subplot(4, 4, i+1)
+        plt.imshow(predictions[i, :, :, 0] * 0.5 + 0.5, cmap='gray')  
+        plt.axis('off')
 
-  fig = plt.figure(figsize=(4, 4))
+    # Save the generated images to a file
+    plt.savefig('image_at_epoch_{:04d}.png'.format(epoch))
+    plt.show()
 
-  for i in range(predictions.shape[0]):
-      plt.subplot(4, 4, i+1)
-      plt.imshow(predictions[i, :, :, 0] * 127.5 + 127.5, cmap='gray')
-      plt.axis('off')
 
-  plt.savefig('image_at_epoch_{:04d}.png'.format(epoch))
-  plt.show()
 
-#Train the model
+input_img_path = "C:/Users/alici/Documents/Uni/TFG/reading_images"
+files_names = os.listdir(input_img_path)
+images = []
+
+file_name = files_names[0]  # Escoge la primera imagen de la lista
+
+image = cv2.imread(input_img_path + "/" + file_name, 0)
+print(input_img_path + "/" + file_name)
+image_normalized = (image - 127.5) / 127.5 
+image_redim = cv2.resize(image_normalized, (28, 28))
+# for file_name in files_names:
+#     image = cv2.imread(input_img_path + "/" + file_name, 0)
+#     print(input_img_path + "/" + file_name)
+#     image_normalized = (image - 127.5) / 127.5 
+#     image_redim = cv2.resize(image_normalized, (28, 28))
+#     images.append(image_redim)
+
+# images_np = np.array(images)
+images = [image_redim]
+# Entrenar el modelo
+#train_dataset = tf.data.Dataset.from_tensor_slices(images_np).shuffle(BUFFER_SIZE).batch(BATCH_SIZE)
+train_dataset = tf.data.Dataset.from_tensor_slices(np.array(images)).shuffle(BUFFER_SIZE).batch(BATCH_SIZE)
+
 train(train_dataset, EPOCHS)
-checkpoint.restore(tf.train.latest_checkpoint(checkpoint_dir))
 
-#Create a GIF
-# Display a single image using the epoch number
-def display_image(epoch_no):
-  return PIL.Image.open('image_at_epoch_{:04d}.png'.format(epoch_no))
+# Cargar y mostrar la última imagen generada
+last_generated_image = Image.open('last_generated_image.png')
+plt.imshow(last_generated_image)
+plt.axis('off')
+plt.show()
 
 
-display_image(EPOCHS)
-anim_file = 'dcgan.gif'
+r = 1  # Número de huellas dactilares inscritas en el dispositivo víctima
+FAR = 0.99  # Tasa de falsa aceptación del sistema objetivo
+FIPS = 10  # Número de imágenes de huellas dactilares enviadas por segundo
+t = 5  # Número de intentos de fuerza bruta
 
-with imageio.get_writer(anim_file, mode='I') as writer:
-  filenames = glob.glob('image*.png')
-  filenames = sorted(filenames)
-  for filename in filenames:
-    image = imageio.imread(filename)
-    writer.append_data(image)
-  image = imageio.imread(filename)
-  writer.append_data(image)
+# Calcular la tasa de éxito
+rate = success_rate(r, FAR, FIPS, t)
+print("Tasa de éxito del ataque de fuerza bruta:", rate)
+#print("Tasa de éxito del ataque después de {} segundos: {:.2%}".format(t, rate))
