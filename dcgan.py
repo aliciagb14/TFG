@@ -8,6 +8,7 @@ import os
 from PIL import Image
 from tensorflow.keras import layers
 import time
+import scipy
 
 
 from IPython import display
@@ -17,37 +18,37 @@ BATCH_SIZE = 256
 
 def make_generator():
     model = tf.keras.Sequential()
-    model.add(layers.Dense(7*7*512, use_bias=False, input_shape=(100,)))
+    model.add(layers.Dense(16*16*128, use_bias=False, input_shape=(100,)))
     model.add(layers.BatchNormalization())
     model.add(layers.LeakyReLU())
 
-    model.add(layers.Reshape((7, 7, 512)))
-    assert model.output_shape == (None, 7, 7, 512)
+    model.add(layers.Reshape((16, 16, 128)))
+    assert model.output_shape == (None, 16, 16, 128)
 
-    model.add(layers.Conv2DTranspose(256, (5, 5), strides=(1, 1), padding='same', use_bias=False))
-    assert model.output_shape == (None, 7, 7, 256)
+    model.add(layers.Conv2DTranspose(256, (3, 3), strides=(2, 2), padding='same', use_bias=False))
+    assert model.output_shape == (None, 32, 32, 256)
     model.add(layers.BatchNormalization())
     model.add(layers.LeakyReLU())
 
-    model.add(layers.Conv2DTranspose(128, (5, 5), strides=(2, 2), padding='same', use_bias=False))
-    assert model.output_shape == (None, 14, 14, 128)
+    model.add(layers.Conv2DTranspose(128, (3, 3), strides=(2, 2), padding='same', use_bias=False))
+    assert model.output_shape == (None, 64, 64, 128)
     model.add(layers.BatchNormalization())
     model.add(layers.LeakyReLU())
 
-    model.add(layers.Conv2DTranspose(64, (5, 5), strides=(2, 2), padding='same', use_bias=False))
-    assert model.output_shape == (None, 28, 28, 64)
+    model.add(layers.Conv2DTranspose(64, (3, 3), strides=(2, 2), padding='same', use_bias=False))
+    assert model.output_shape == (None, 128, 128, 64)
     model.add(layers.BatchNormalization())
     model.add(layers.LeakyReLU())
 
-    model.add(layers.Conv2DTranspose(1, (5, 5), strides=(1, 1), padding='same', use_bias=False, activation='tanh'))
-    assert model.output_shape == (None, 28, 28, 1)
+    model.add(layers.Conv2D(1, (3, 3), strides=(1, 1), padding='same', use_bias=False, activation='tanh'))
+    assert model.output_shape == (None, 128, 128, 1)
 
     return model
 
 def make_discriminator():
     model = tf.keras.Sequential()
     model.add(layers.Conv2D(64, (5, 5), strides=(2, 2), padding='same',
-                                     input_shape=[28, 28, 1]))
+                             input_shape=[128, 128, 1]))
     model.add(layers.LeakyReLU())
     model.add(layers.Dropout(0.3))
 
@@ -55,8 +56,16 @@ def make_discriminator():
     model.add(layers.LeakyReLU())
     model.add(layers.Dropout(0.3))
 
+    model.add(layers.Conv2D(256, (5, 5), strides=(2, 2), padding='same'))
+    model.add(layers.LeakyReLU())
+    model.add(layers.Dropout(0.3))
+
+    model.add(layers.Conv2D(512, (5, 5), strides=(2, 2), padding='same'))
+    model.add(layers.LeakyReLU())
+    model.add(layers.Dropout(0.3))
+
     model.add(layers.Flatten())
-    model.add(layers.Dense(1))
+    model.add(layers.Dense(1, activation='sigmoid'))
 
     return model
 
@@ -93,7 +102,7 @@ checkpoint = tf.train.Checkpoint(generator_optimizer=generator_optimizer,
                                  generator=generator,
                                  discriminator=discriminator)
 
-EPOCHS = 400
+EPOCHS = 510
 noise_dim = 100
 num_examples_to_generate = 16
 seed = tf.random.normal([num_examples_to_generate, noise_dim])
@@ -155,7 +164,7 @@ def generate_and_save_images(model, epoch, test_input, saveLast=False):
 
 
 
-input_img_path = "C:/Users/alici/Documents/Uni/TFG/reading_images"
+input_img_path = "C:/Users/alici/Documents/Uni/TFG/DB1_B"
 files_names = os.listdir(input_img_path)
 images = []
 
@@ -164,7 +173,7 @@ file_name = files_names[0]  # Escoge la primera imagen de la lista
 image = cv2.imread(input_img_path + "/" + file_name, 0)
 print(input_img_path + "/" + file_name)
 image_normalized = (image - 127.5) / 127.5 
-image_redim = cv2.resize(image_normalized, (28, 28))
+image_redim = cv2.resize(image_normalized, (128, 128))
 # for file_name in files_names:
 #     image = cv2.imread(input_img_path + "/" + file_name, 0)
 #     print(input_img_path + "/" + file_name)
